@@ -1,6 +1,6 @@
 // TEST YOUR (TTY) MIGHT: DOOM FIRE!
 // (c) 2022, 2023, 2024, 2025  const void*
-// Updated for Zig 0.17
+// Updated for Zig 0.17 + Responsive Resize & Rolling FPS
 //
 // Please see GPL3 license at bottom of source.
 
@@ -45,7 +45,6 @@ pub fn initRNG() !void {
     rand = rand_prng.random();
 }
 
-// Print string directly to console/terminal
 pub fn emit(s: []const u8) !void {
     if (builtin.os.tag == .windows) {
         if (g_tty_win) |h| {
@@ -57,7 +56,6 @@ pub fn emit(s: []const u8) !void {
     }
 }
 
-// Format a string then print
 pub fn emitFmt(comptime s: []const u8, args: anytype) !void {
     const t = try std.fmt.allocPrint(allocator, s, args);
     defer allocator.free(t);
@@ -90,6 +88,10 @@ const cursor_load = esc ++ "8";
 const cursor_show = csi ++ "?25h";
 const cursor_hide = csi ++ "?25l";
 const cursor_home = csi ++ "1;1H";
+
+// Synchronized updates (Eliminates terminal flicker / tearing)
+const sync_begin = csi ++ "?2026h";
+const sync_end = csi ++ "?2026l";
 
 const screen_reset = csi ++ "!p";
 const screen_clear = csi ++ "2J";
@@ -454,27 +456,35 @@ var bs_sz_min: u64 = 0;
 var bs_sz_max: u64 = 0;
 var bs_sz_avg: u64 = 0;
 var bs_frame_tic: u64 = 0;
-var t_start: i64 = 0;
 var t_now: i64 = 0;
-var t_dur: f64 = 0.0;
 var fps: f64 = 0.0;
+var last_frame_time: i64 = 0;
 
 pub fn initBuf() !void {
     const px_char_sz = px.len;
     const px_color_sz = bg[LAST_COLOR].len + fg[LAST_COLOR].len;
     const px_sz = px_color_sz + px_char_sz;
-    const screen_sz: u64 = @as(u64, px_sz * term_sz.width * term_sz.width);
-    const overflow_sz: u64 = px_char_sz * 100;
+    const screen_sz: u64 = @as(u64, px_sz * term_sz.width * term_sz.height * 2);
+    const overflow_sz: u64 = px_char_sz * 1024 + 1024;
     const bs_sz: u64 = screen_sz + overflow_sz;
 
     bs = try allocator.alloc(u8, bs_sz * 2);
-    t_start = getMilliTimestamp();
     resetBuf();
+    resetMetrics();
 }
 
 pub fn resetBuf() void {
     bs_idx = 0;
     bs_len = 0;
+}
+
+pub fn resetMetrics() void {
+    bs_frame_tic = 0;
+    bs_sz_min = 0;
+    bs_sz_max = 0;
+    bs_sz_avg = 0;
+    last_frame_time = 0;
+    fps = if (target_fps > 0) @as(f64, @floatFromInt(target_fps)) else 30.0;
 }
 
 pub fn drawBuf(s: []const u8) void {
@@ -487,7 +497,9 @@ pub fn drawBuf(s: []const u8) void {
 
 pub fn paintBuf() !void {
     if (bs_len > 1) {
+        try emit(sync_begin);
         try emit(bs[0 .. bs_len - 1]);
+        try emit(sync_end);
     }
     t_now = getMilliTimestamp();
     bs_frame_tic += 1;
@@ -505,10 +517,14 @@ pub fn paintBuf() !void {
         bs_sz_avg = bs_sz_avg * (bs_frame_tic - 1) / bs_frame_tic + bs_len / bs_frame_tic;
     }
 
-    t_dur = @as(f64, @floatFromInt(t_now - t_start)) / 1000.0;
-    if (t_dur > 0) {
-        fps = @as(f64, @floatFromInt(bs_frame_tic)) / t_dur;
+    if (last_frame_time > 0) {
+        const delta_ms = t_now - last_frame_time;
+        if (delta_ms > 0) {
+            const instant_fps = 1000.0 / @as(f64, @floatFromInt(delta_ms));
+            fps = fps * 0.90 + instant_fps * 0.10;
+        }
     }
+    last_frame_time = t_now;
 
     try emit(fg[0]);
     try emitFmt("mem: {Bi:.2} min / {Bi:.2} avg / {Bi:.2} max [ {d:.2} fps ]", .{
@@ -524,10 +540,10 @@ pub fn freeBuf() void {
 }
 
 pub fn showDoomFire() !void {
-    const FIRE_H: u64 = @as(u64, @intCast(term_sz.height)) * 2;
-    const FIRE_W: u64 = @as(u64, @intCast(term_sz.width));
-    const FIRE_SZ: u64 = FIRE_H * FIRE_W;
-    const FIRE_LAST_ROW: u64 = (FIRE_H - 1) * FIRE_W;
+    var FIRE_H: u64 = @as(u64, @intCast(term_sz.height)) * 2;
+    var FIRE_W: u64 = @as(u64, @intCast(term_sz.width));
+    var FIRE_SZ: u64 = FIRE_H * FIRE_W;
+    var FIRE_LAST_ROW: u64 = (FIRE_H - 1) * FIRE_W;
 
     const fire_palette = [_]u8{ 0, 233, 234, 52, 53, 88, 89, 94, 95, 96, 130, 131, 132, 133, 172, 214, 215, 220, 220, 221, 3, 226, 227, 230, 195, 230 };
     const fire_black: u8 = 0;
@@ -536,15 +552,8 @@ pub fn showDoomFire() !void {
     var screen_buf: []u8 = try allocator.alloc(u8, FIRE_SZ);
     defer allocator.free(screen_buf);
 
-    var buf_idx: u64 = 0;
-    while (buf_idx < FIRE_SZ) : (buf_idx += 1) {
-        screen_buf[buf_idx] = fire_black;
-    }
-
-    buf_idx = 0;
-    while (buf_idx < FIRE_W) : (buf_idx += 1) {
-        screen_buf[FIRE_LAST_ROW + buf_idx] = fire_white;
-    }
+    @memset(screen_buf, fire_black);
+    @memset(screen_buf[FIRE_LAST_ROW .. FIRE_LAST_ROW + FIRE_W], fire_white);
 
     try emit(cursor_home);
     try emit(color_reset);
@@ -583,6 +592,26 @@ pub fn showDoomFire() !void {
 
     while (true) {
         const frame_start = getMilliTimestamp();
+
+        // Detect resize (e.g. F11 fullscreen toggle or window zoom)
+        const cur_sz = getTermSz() catch term_sz;
+        if (cur_sz.width != term_sz.width or cur_sz.height != term_sz.height) {
+            term_sz = cur_sz;
+            FIRE_H = @as(u64, @intCast(term_sz.height)) * 2;
+            FIRE_W = @as(u64, @intCast(term_sz.width));
+            FIRE_SZ = FIRE_H * FIRE_W;
+            FIRE_LAST_ROW = (FIRE_H - 1) * FIRE_W;
+
+            allocator.free(screen_buf);
+            screen_buf = try allocator.alloc(u8, FIRE_SZ);
+            @memset(screen_buf, fire_black);
+            @memset(screen_buf[FIRE_LAST_ROW .. FIRE_LAST_ROW + FIRE_W], fire_white);
+
+            freeBuf();
+            try initBuf();
+            resetMetrics();
+            try emit(screen_clear);
+        }
 
         doFire_x = 0;
         while (doFire_x < FIRE_W) : (doFire_x += 1) {
