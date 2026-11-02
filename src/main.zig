@@ -14,6 +14,8 @@ var g_tty_win: ?std.os.windows.HANDLE = null;
 var rand_prng: std.Random.DefaultPrng = undefined;
 var rand: std.Random = undefined;
 
+var target_fps: u32 = 0; // 0 = uncapped
+
 pub fn getMilliTimestamp() i64 {
     if (builtin.os.tag == .windows) {
         var count: i64 = 0;
@@ -570,7 +572,18 @@ pub fn showDoomFire() !void {
     try initBuf();
     defer freeBuf();
 
+    if (builtin.os.tag == .windows) {
+        _ = win32.timeBeginPeriod(1);
+    }
+    defer if (builtin.os.tag == .windows) {
+        _ = win32.timeEndPeriod(1);
+    };
+
+    const target_frame_ms: i64 = if (target_fps > 0) @divTrunc(1000, @as(i64, target_fps)) else 0;
+
     while (true) {
+        const frame_start = getMilliTimestamp();
+
         doFire_x = 0;
         while (doFire_x < FIRE_W) : (doFire_x += 1) {
             doFire_y = 0;
@@ -624,10 +637,36 @@ pub fn showDoomFire() !void {
         }
         try paintBuf();
         resetBuf();
+
+        if (target_frame_ms > 0) {
+            const elapsed = getMilliTimestamp() - frame_start;
+            if (elapsed < target_frame_ms) {
+                sleepMs(@intCast(target_frame_ms - elapsed));
+            }
+        }
     }
 }
 
+fn parseTargetFps() u32 {
+    if (builtin.os.tag == .windows) {
+        const cmd_raw = win32.GetCommandLineA();
+        const cmd = std.mem.sliceTo(cmd_raw, 0);
+
+        var iter = std.mem.tokenizeScalar(u8, cmd, ' ');
+        _ = iter.next();
+
+        while (iter.next()) |token| {
+            if (std.mem.eql(u8, token, "--")) continue;
+            return std.fmt.parseInt(u32, token, 10) catch 0;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 pub fn main() anyerror!void {
+    target_fps = parseTargetFps();
+
     try initTerm();
     defer complete() catch {};
 
@@ -701,9 +740,12 @@ const win32 = struct {
         out_lpNumberOfCharsRead: ?*DWORD,
         pInputControl: ?*anyopaque,
     ) callconv(.c) BOOL;
-    
+
     pub extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.c) ?HANDLE;
     pub extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *i64) callconv(.c) BOOL;
     pub extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *i64) callconv(.c) BOOL;
     pub extern "kernel32" fn Sleep(dwMilliseconds: DWORD) callconv(.c) void;
+    pub extern "kernel32" fn GetCommandLineA() callconv(.c) [*:0]const u8;
+    pub extern "winmm" fn timeBeginPeriod(uPeriod: UINT) callconv(.c) UINT;
+    pub extern "winmm" fn timeEndPeriod(uPeriod: UINT) callconv(.c) UINT;
 };

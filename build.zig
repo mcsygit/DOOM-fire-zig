@@ -49,6 +49,14 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `run` step rather than the default, which is "install".
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+    
+    // 2. Dedicated cozy fireplace step (pre-configured to 30 FPS)
+    const fireplace_cmd = b.addRunArtifact(exe);
+    fireplace_cmd.step.dependOn(b.getInstallStep());
+    fireplace_cmd.addArg("30"); // Automatically passes "30"
+
+    const fireplace_step = b.step("fireplace", "Run DOOM fire as a cozy 30 FPS fireplace");
+    fireplace_step.dependOn(&fireplace_cmd.step);
 
     // -----------------------------------
     // commented out test to avoid permission issues when building .exe
