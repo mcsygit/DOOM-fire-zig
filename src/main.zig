@@ -545,7 +545,30 @@ pub fn showDoomFire() !void {
     var FIRE_SZ: u64 = FIRE_H * FIRE_W;
     var FIRE_LAST_ROW: u64 = (FIRE_H - 1) * FIRE_W;
 
-    const fire_palette = [_]u8{ 0, 233, 234, 52, 53, 88, 89, 94, 95, 96, 130, 131, 132, 133, 172, 214, 215, 220, 220, 221, 3, 226, 227, 230, 195, 230 };
+    const fire_palette = [_]u8{
+        0,   // Pure black (OLED off)
+        16,
+        233,
+        234,
+        52,  // Dark maroon
+        53,
+        88,  // Blood red
+        89,
+        94,  // Dark amber brown
+        95,
+        130, // Rust orange
+        131,
+        166, // Warm dark orange
+        172, // Warm amber
+        208, // Soft orange
+        202, // Rich sunset orange
+        214, // Soft gold (peak brightness - no pure yellow/white)
+        178, // Deep gold
+        136, // Honey amber
+        94,  // Transition back down to embers
+        52,  // Deep red
+        17,  // Deep midnight blue baseline
+    };
     const fire_black: u8 = 0;
     const fire_white: u8 = fire_palette.len - 1;
 
